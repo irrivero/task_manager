@@ -1,48 +1,60 @@
+# Docker Compose configuration for microservices architecture
+# This file defines how all our services work together
 version: '3.8'
 
 services:
+  # API GATEWAY - Single entry point for all requests
+  # Routes requests to the appropriate microservice
   api-gateway:
-    build: ./gateway
+    build: ./gateway                    # Build from gateway folder
     ports:
-      - "3000:3000"
+      - "3000:3000"                     # Expose on localhost:3000
     environment:
+      # Tell gateway where to find other services
       - USER_SERVICE_URL=http://user-service:3001
       - TASK_SERVICE_URL=http://task-service:3002
     depends_on:
-      - user-service
+      - user-service                    # Wait for services to start first
       - task-service
     volumes:
-      - ./frontend:/usr/src/app/public
+      - ./frontend:/usr/src/app/public  # Mount frontend files
 
+  # USER SERVICE - Handles authentication and user management
+  # Completely independent service with its own logic
   user-service:
     build: ./services/user-service
     ports:
-      - "3001:3001"
+      - "3001:3001"                     # Internal port for service communication
     environment:
+      # Database connection string
       - DATABASE_URL=postgresql://user:password@postgres:5432/taskdb
     depends_on:
-      - postgres
+      - postgres                        # Needs database to be running
 
+  # TASK SERVICE - Manages tasks and business logic
+  # Shows how services communicate with each other
   task-service:
     build: ./services/task-service
     ports:
       - "3002:3002"
     environment:
       - DATABASE_URL=postgresql://user:password@postgres:5432/taskdb
-      - USER_SERVICE_URL=http://user-service:3001
+      - USER_SERVICE_URL=http://user-service:3001  # How it calls user service
     depends_on:
       - postgres
 
+  # SHARED DATABASE - All services use the same DB
+  # In real microservices, each service often has its own database
   postgres:
-    image: postgres:13
+    image: postgres:13                  # Use official PostgreSQL image
     environment:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=taskdb
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data  # Persist data
     ports:
-      - "5432:5432"
+      - "5432:5432"                     # Expose for debugging
 
 volumes:
-  postgres_data:
+  postgres_data:                        # Named volume for database persistence
