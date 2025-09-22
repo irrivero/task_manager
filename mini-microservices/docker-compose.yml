@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  api-gateway:
+    build: ./gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - USER_SERVICE_URL=http://user-service:3001
+      - TASK_SERVICE_URL=http://task-service:3002
+    depends_on:
+      - user-service
+      - task-service
+    volumes:
+      - ./frontend:/usr/src/app/public
+
+  user-service:
+    build: ./services/user-service
+    ports:
+      - "3001:3001"
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/taskdb
+    depends_on:
+      - postgres
+
+  task-service:
+    build: ./services/task-service
+    ports:
+      - "3002:3002"
+    environment:
+      - DATABASE_URL=postgresql://user:password@postgres:5432/taskdb
+      - USER_SERVICE_URL=http://user-service:3001
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=taskdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
