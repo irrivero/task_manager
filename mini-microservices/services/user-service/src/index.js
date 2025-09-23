@@ -13,6 +13,62 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 // Connect to database
 client.connect().catch(console.error);
 
+// Add this after client.connect().catch(console.error);
+
+// Initialize database and create admin user
+async function initializeDatabase() {
+	try {
+		// Create users table
+		await client.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                email VARCHAR(100) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                role VARCHAR(20) DEFAULT 'user',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+		// Create tasks table
+		await client.query(`
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                title VARCHAR(255) NOT NULL,
+                description TEXT,
+                completed BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+		// Check if admin user exists
+		const adminCheck = await client.query(
+			'SELECT id FROM users WHERE username = $1',
+			['admin']
+		);
+
+		if (adminCheck.rows.length === 0) {
+			// Create admin user with password123
+			const hashedPassword = await bcrypt.hash('password123', 10);
+			await client.query(
+				'INSERT INTO users (username, email, password_hash, role) VALUES ($1, $2, $3, $4)',
+				['admin', 'admin@example.com', hashedPassword, 'admin']
+			);
+			console.log('✅ Admin user created: username=admin, password=password123');
+		}
+
+		console.log('✅ Database initialized successfully');
+	} catch (error) {
+		console.error('❌ Database initialization failed:', error);
+	}
+}
+
+// Call initialization
+initializeDatabase();
+
 // JWT authentication middleware
 fastify.register(require('@fastify/jwt'), {
 	secret: JWT_SECRET

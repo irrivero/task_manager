@@ -28,7 +28,7 @@ const verifyToken = async (request, reply) => {
 		}
 
 		// Verify the JWT token (should match what user service creates)
-		const decoded = jwt.verify(token, 'secret');
+		const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
 		request.user = decoded;  // Add user info to request for later use
 	} catch (error) {
 		reply.code(401).send({ error: 'Invalid token' });
@@ -55,7 +55,7 @@ fastify.post('/api/auth/register', async (request, reply) => {
 		// Forward the entire request body to user service
 		// axios.post makes HTTP call to another service
 		const response = await axios.post(
-			`${process.env.USER_SERVICE_URL}/register`,
+			`${process.env.USER_SERVICE_URL}/auth/register`,
 			request.body
 		);
 		return response.data;  // Send back whatever user service returned
@@ -70,7 +70,7 @@ fastify.post('/api/auth/register', async (request, reply) => {
 fastify.post('/api/auth/login', async (request, reply) => {
 	try {
 		const response = await axios.post(
-			`${process.env.USER_SERVICE_URL}/login`,
+			`${process.env.USER_SERVICE_URL}/auth/login`,
 			request.body
 		);
 		return response.data;
