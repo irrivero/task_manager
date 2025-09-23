@@ -1,38 +1,30 @@
 const fastify = require('fastify')({ logger: true });
-const { Pool } = require('pg');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { Client } = require('pg');
 
 // Database connection
-const pool = new Pool({
-	connectionString: process.env.DATABASE_URL,
+const client = new Client({
+	connectionString: process.env.DATABASE_URL
 });
 
-// Initialize database tables
-const initDatabase = async () => {
-	try {
-		await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        email VARCHAR(100) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-		console.log('Users table initialized');
-	} catch (error) {
-		console.error('Database initialization error:', error);
-	}
-};
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+
+// Connect to database
+client.connect().catch(console.error);
+
+// JWT authentication middleware
+fastify.register(require('@fastify/jwt'), {
+	secret: JWT_SECRET
+});
 
 // Health check
 fastify.get('/health', async (request, reply) => {
-	return { status: 'User Service is running' };
+	return { service: 'user-service', status: 'healthy' };
 });
 
-// Register user
-fastify.post('/register', async (request, reply) => {
+// Register new user
+fastify.post('/auth/register', async (request, reply) => {
 	try {
 		const { username, email, password } = request.body;
 
@@ -40,57 +32,50 @@ fastify.post('/register', async (request, reply) => {
 			return reply.code(400).send({ error: 'Missing required fields' });
 		}
 
-		// Check if user already exists
-		const existingUser = await pool.query(
+		// Check if user exists
+		const existingUser = await client.query(
 			'SELECT id FROM users WHERE username = $1 OR email = $2',
 			[username, email]
 		);
 
 		if (existingUser.rows.length > 0) {
-			return reply.code(409).send({ error: 'User already exists' });
+			return reply.code(400).send({ error: 'User already exists' });
 		}
 
 		// Hash password
-		const saltRounds = 10;
-		const passwordHash = await bcrypt.hash(password, saltRounds);
+		const hashedPassword = await bcrypt.hash(password, 10);
 
 		// Create user
-		const result = await pool.query(
+		const result = await client.query(
 			'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email',
-			[username, email, passwordHash]
+			[username, email, hashedPassword]
 		);
 
 		const user = result.rows[0];
-
-		// Generate JWT token
-		const token = jwt.sign(
-			{ userId: user.id, username: user.username },
-			'secret',
-			{ expiresIn: '24h' }
-		);
+		const token = fastify.jwt.sign({ userId: user.id, username: user.username });
 
 		return {
-			message: 'User registered successfully',
+			success: true,
 			user: { id: user.id, username: user.username, email: user.email },
 			token
 		};
 	} catch (error) {
-		console.error('Registration error:', error);
-		return reply.code(500).send({ error: 'Registration failed' });
+		console.error('Register error:', error);
+		return reply.code(500).send({ error: 'Internal server error' });
 	}
 });
 
 // Login user
-fastify.post('/login', async (request, reply) => {
+fastify.post('/auth/login', async (request, reply) => {
 	try {
 		const { username, password } = request.body;
 
 		if (!username || !password) {
-			return reply.code(400).send({ error: 'Username and password required' });
+			return reply.code(400).send({ error: 'Missing username or password' });
 		}
 
 		// Find user
-		const result = await pool.query(
+		const result = await client.query(
 			'SELECT id, username, email, password_hash FROM users WHERE username = $1',
 			[username]
 		);
@@ -101,38 +86,51 @@ fastify.post('/login', async (request, reply) => {
 
 		const user = result.rows[0];
 
-		// Verify password
-		const isValidPassword = await bcrypt.compare(password, user.password_hash);
-		if (!isValidPassword) {
+		// Check password
+		const validPassword = await bcrypt.compare(password, user.password_hash);
+		if (!validPassword) {
 			return reply.code(401).send({ error: 'Invalid credentials' });
 		}
 
-		// Generate JWT token
-		const token = jwt.sign(
-			{ userId: user.id, username: user.username },
-			'secret',
-			{ expiresIn: '24h' }
-		);
+		// Generate token
+		const token = fastify.jwt.sign({ userId: user.id, username: user.username });
 
 		return {
-			message: 'Login successful',
+			success: true,
 			user: { id: user.id, username: user.username, email: user.email },
 			token
 		};
 	} catch (error) {
 		console.error('Login error:', error);
-		return reply.code(500).send({ error: 'Login failed' });
+		return reply.code(500).send({ error: 'Internal server error' });
 	}
 });
 
-// Verify token (for other services)
-fastify.get('/verify/:userId', async (request, reply) => {
+// Middleware to verify JWT
+async function authenticate(request, reply) {
 	try {
-		const { userId } = request.params;
+		const authHeader = request.headers.authorization;
 
-		const result = await pool.query(
-			'SELECT id, username, email FROM users WHERE id = $1',
-			[userId]
+		if (!authHeader || !authHeader.startsWith('Bearer ')) {
+			return reply.code(401).send({ error: 'No token provided' });
+		}
+
+		const token = authHeader.substring(7);
+		const decoded = fastify.jwt.verify(token);
+		request.user = decoded;
+	} catch (error) {
+		return reply.code(401).send({ error: 'Invalid token' });
+	}
+}
+
+// Get user profile (protected route)
+fastify.get('/auth/profile', {
+	preValidation: [authenticate]
+}, async (request, reply) => {
+	try {
+		const result = await client.query(
+			'SELECT id, username, email, created_at FROM users WHERE id = $1',
+			[request.user.userId]
 		);
 
 		if (result.rows.length === 0) {
@@ -141,15 +139,30 @@ fastify.get('/verify/:userId', async (request, reply) => {
 
 		return { user: result.rows[0] };
 	} catch (error) {
-		console.error('User verification error:', error);
-		return reply.code(500).send({ error: 'Verification failed' });
+		console.error('Profile error:', error);
+		return reply.code(500).send({ error: 'Internal server error' });
+	}
+});
+
+// Verify token (for other services)
+fastify.post('/auth/verify', async (request, reply) => {
+	try {
+		const { token } = request.body;
+
+		if (!token) {
+			return reply.code(400).send({ error: 'Token required' });
+		}
+
+		const decoded = fastify.jwt.verify(token);
+		return { valid: true, user: decoded };
+	} catch (error) {
+		return reply.code(401).send({ valid: false, error: 'Invalid token' });
 	}
 });
 
 // Start server
 const start = async () => {
 	try {
-		await initDatabase();
 		await fastify.listen({ port: 3001, host: '0.0.0.0' });
 		console.log('User Service running on port 3001');
 	} catch (err) {
